@@ -1,4 +1,4 @@
 <?jelly escape-by-default='true'?>
 <div>
-  notify hipchat.
+  This plugin sends notification to HipChat.
 </div>

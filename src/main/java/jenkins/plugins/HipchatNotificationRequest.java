@@ -1,4 +1,4 @@
-package jp.aira813.hipchatnotifier.dto;
+package jenkins.plugins;
 
 import org.apache.commons.lang.builder.ToStringBuilder;
 import org.apache.http.NameValuePair;
@@ -19,24 +19,6 @@ public class HipchatNotificationRequest {
     private boolean html;
     private String from;
 
-    private boolean test = false;
-
-    public boolean isHtml() {
-        return html;
-    }
-
-    public void setHtml(boolean html) {
-        this.html = html;
-    }
-
-    public boolean isTest() {
-        return test;
-    }
-
-    public void setTest(boolean test) {
-        this.test = test;
-    }
-
     public enum COLOR {
         yellow,
         green,
@@ -46,39 +28,30 @@ public class HipchatNotificationRequest {
         random
     }
 
-    public HipchatNotificationRequest(String url, String token, String roomId, String message) {
+    public HipchatNotificationRequest(String url, String token, String roomId) {
         this.url = url;
         this.token = token;
         this.roomId = roomId;
-        this.message = message;
-    }
-
-    public COLOR getColor() {
-        return color;
     }
 
     public void setColor(COLOR color) {
         this.color = color;
     }
 
-    public boolean isNotify() {
-        return notify;
-    }
-
     public void setNotify(boolean notify) {
         this.notify = notify;
-    }
-
-    public String getFrom() {
-        return from;
     }
 
     public void setFrom(String from) {
         this.from = from;
     }
 
-    public boolean isValid() {
-        return true;
+    public void setHtml(boolean html) {
+        this.html = html;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
     }
 
     public List<NameValuePair> toParams() {
@@ -92,11 +65,7 @@ public class HipchatNotificationRequest {
     }
 
     public String toUri() {
-        String uri =  String.format("%s/room/%s/notification?auth_token=%s", url, roomId, token);
-        if(test){
-            uri +="&auth_test=true";
-        }
-        return uri;
+        return String.format("%s/room/%s/notification?auth_token=%s", url, roomId, token);
     }
 
     @Override

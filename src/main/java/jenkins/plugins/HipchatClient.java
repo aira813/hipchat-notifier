@@ -1,12 +1,11 @@
-package jp.aira813.hipchatnotifier.client;
+package jenkins.plugins;
 
-import jp.aira813.hipchatnotifier.dto.HipchatNotificationRequest;
-import jp.aira813.hipchatnotifier.exception.HipchatNotifierException;
 import org.apache.commons.lang.CharEncoding;
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
+import org.apache.http.NameValuePair;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
@@ -17,9 +16,13 @@ import org.apache.http.util.EntityUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class HipchatClient {
 
+    private static final Logger LOGGER = Logger.getLogger(HipchatClient.class.getName());
     RequestConfig requestConfig;
 
     public HipchatClient() {
@@ -33,38 +36,46 @@ public class HipchatClient {
             .build();
     }
 
-    public void exec(HipchatNotificationRequest request) throws HipchatNotifierException {
+    public boolean exec(HipchatNotificationRequest request) {
+        Integer status = post(request.toUri(), request.toParams());
+        if (status != HttpStatus.SC_NO_CONTENT) {
+            LOGGER.log(Level.WARNING, "api error! status:" + status);
+            return false;
+        }
+        return true;
+    }
+
+    public boolean execForTest(HipchatNotificationRequest request) {
+        Integer status = post(request.toUri() + "&auth_test=true", request.toParams());
+        if (status != HttpStatus.SC_ACCEPTED) {
+            LOGGER.log(Level.WARNING, "api error! status:" + status);
+            return false;
+        }
+        return true;
+    }
+
+    public Integer post(String uri, List<NameValuePair> param) {
         ArrayList<Header> headers = new ArrayList<Header>();
         headers.add(new BasicHeader("Content-type", "application/x-www-form-urlencoded"));
         HttpClient httpClient = HttpClientBuilder.create()
             .setDefaultRequestConfig(requestConfig)
             .setDefaultHeaders(headers).build();
-
         HttpEntity resEntity = null;
-        System.out.println(request.toUri());
-        HttpPost post = new HttpPost(request.toUri());
+        HttpPost post = new HttpPost(uri);
         try {
-            post.setEntity(new UrlEncodedFormEntity(request.toParams(), CharEncoding.UTF_8));
+            post.setEntity(new UrlEncodedFormEntity(param, CharEncoding.UTF_8));
             HttpResponse response = httpClient.execute(post);
             resEntity = response.getEntity();
-            int status = response.getStatusLine().getStatusCode();
-            if (request.isTest()) {
-                if (status != HttpStatus.SC_ACCEPTED) {
-                    throw new HipchatNotifierException("api error! status:" + status);
-                }
-            } else {
-                if (status != HttpStatus.SC_NO_CONTENT) {
-                    throw new HipchatNotifierException("api error! status:" + status);
-                }
-            }
+            return response.getStatusLine().getStatusCode();
         } catch (IOException e) {
-            throw new HipchatNotifierException("api error!", e);
+            LOGGER.log(Level.WARNING, "api error!", e);
         } finally {
             try {
                 EntityUtils.consume(resEntity);
             } catch (IOException e) {
             }
         }
+        return null;
     }
 
 }

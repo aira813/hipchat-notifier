@@ -1,4 +1,4 @@
-package jp.aira813.hipchatnotifier;
+package jenkins.plugins;
 
 import hudson.Extension;
 import hudson.Launcher;
@@ -6,40 +6,44 @@ import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
 import hudson.tasks.BuildStepDescriptor;
-import hudson.tasks.Builder;
+import hudson.tasks.BuildStepMonitor;
+import hudson.tasks.Notifier;
+import hudson.tasks.Publisher;
+import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
-import jp.aira813.hipchatnotifier.client.HipchatClient;
-import jp.aira813.hipchatnotifier.dto.HipchatNotificationRequest;
-import jp.aira813.hipchatnotifier.exception.HipchatNotifierException;
 import net.sf.json.JSONObject;
 import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.export.Exported;
 
 import java.util.List;
 
-public class NotifyHipchatBuilder extends Builder {
+public class HipChatNotify extends Notifier {
     private final String message;
     private final String color;
     private final boolean html;
     private final boolean notify;
     private final String from;
     private final String roomName;
+    private final boolean markFlag;
 
     @DataBoundConstructor
-    public NotifyHipchatBuilder(
+    public HipChatNotify(
         String message,
         String color,
         boolean html,
         boolean notify,
         String from,
-        String roomName) {
+        String roomName,
+        boolean markFlag) {
         this.message = message;
         this.color = color;
         this.html = html;
         this.notify = notify;
         this.from = from;
         this.roomName = roomName;
+        this.markFlag = markFlag;
     }
 
     public String getMessage() {
@@ -48,10 +52,6 @@ public class NotifyHipchatBuilder extends Builder {
 
     public String getColor() {
         return color;
-    }
-
-    public boolean isHtml() {
-        return html;
     }
 
     public boolean isNotify() {
@@ -66,30 +66,35 @@ public class NotifyHipchatBuilder extends Builder {
         return roomName;
     }
 
+    public boolean isHtml() {
+        return html;
+    }
+
+    public boolean isMarkFlag() {
+        return markFlag;
+    }
+
     @Override
     public boolean perform(AbstractBuild build, Launcher launcher, BuildListener listener) {
 
         HipchatAuthentication authentication = getAuthentication();
         if (authentication == null) {
             listener.getLogger().println("[ERROR] Hipcaht Notifier. Can't find authentication. roomName:" + roomName);
-            return false;
+            return !markFlag;
         }
 
         String url = Messages.Api_Url();
-        HipchatNotificationRequest request = new HipchatNotificationRequest(url, authentication.getToken(), authentication.getRoom(), message);
+        HipchatNotificationRequest request = new HipchatNotificationRequest(url, authentication.getToken(), authentication.getRoom());
+        request.setMessage(message);
         request.setColor(HipchatNotificationRequest.COLOR.valueOf(color));
         request.setFrom(from);
         request.setHtml(html);
         request.setNotify(notify);
 
         HipchatClient client = new HipchatClient();
-        try {
-            client.exec(request);
-        } catch (HipchatNotifierException e) {
-            listener.getLogger().println("[ERROR] Hipcaht Notifier." + e.getMessage());
-            return false;
-        }
-        return true;
+        boolean isSuccess = client.exec(request);
+        build.getResult();
+        return !markFlag || isSuccess;
     }
 
     private HipchatAuthentication getAuthentication() {
@@ -106,8 +111,13 @@ public class NotifyHipchatBuilder extends Builder {
         return (DescriptorImpl) super.getDescriptor();
     }
 
+    @Override
+    public BuildStepMonitor getRequiredMonitorService() {
+        return BuildStepMonitor.BUILD;
+    }
+
     @Extension
-    public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
+    public static final class DescriptorImpl extends BuildStepDescriptor<Publisher> {
 
         private HipchatAuthentication[] authentications = new HipchatAuthentication[] {};
 
@@ -151,6 +161,18 @@ public class NotifyHipchatBuilder extends Builder {
                 items.add(hipchatAuthentication.getName(), hipchatAuthentication.getName());
             }
             return items;
+        }
+
+        public FormValidation doCheckRoomName(@QueryParameter String value) {
+            if (authentications.length == 0) {
+                return FormValidation.error(Messages.Error_NoRooms());
+            }
+            for (HipchatAuthentication authentication : authentications) {
+                if (authentication.getName() != null && authentication.getName().equals(value)) {
+                    return FormValidation.ok();
+                }
+            }
+            return FormValidation.error(Messages.Error_NoContent());
         }
 
     }

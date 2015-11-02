@@ -1,12 +1,9 @@
-package jp.aira813.hipchatnotifier;
+package jenkins.plugins;
 
 import hudson.Extension;
 import hudson.model.AbstractDescribableImpl;
 import hudson.model.Descriptor;
 import hudson.util.FormValidation;
-import jp.aira813.hipchatnotifier.client.HipchatClient;
-import jp.aira813.hipchatnotifier.dto.HipchatNotificationRequest;
-import jp.aira813.hipchatnotifier.exception.HipchatNotifierException;
 import org.apache.commons.lang.StringUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
@@ -85,13 +82,12 @@ public class HipchatAuthentication extends AbstractDescribableImpl<HipchatAuthen
             }
 
             String url = Messages.Api_Url();
-            HipchatNotificationRequest request = new HipchatNotificationRequest(url, token, room, "");
-            request.setTest(true);
+            HipchatNotificationRequest request = new HipchatNotificationRequest(url, token, room);
 
             HipchatClient client = new HipchatClient();
             try {
-                client.exec(request);
-            } catch (HipchatNotifierException e) {
+                client.execForTest(request);
+            } catch (Exception e) {
                 return FormValidation.error("can not connect to hipchat. check token and room." + e.getMessage());
             }
             return FormValidation.ok("OK!");
