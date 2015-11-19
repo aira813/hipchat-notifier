@@ -160,6 +160,9 @@ public class HipChatNotify extends Notifier {
             for (HipchatAuthentication hipchatAuthentication : authentications) {
                 items.add(hipchatAuthentication.getName(), hipchatAuthentication.getName());
             }
+            if(items.size() == 0){
+                items.add("( No Rooms )");
+            }
             return items;
         }
 
