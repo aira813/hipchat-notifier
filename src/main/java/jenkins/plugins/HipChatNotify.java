@@ -1,7 +1,9 @@
 package jenkins.plugins;
 
+import hudson.EnvVars;
 import hudson.Extension;
 import hudson.Launcher;
+import hudson.Proc;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
@@ -9,6 +11,7 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Notifier;
 import hudson.tasks.Publisher;
+import hudson.util.ArgumentListBuilder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import net.sf.json.JSONObject;
@@ -17,9 +20,21 @@ import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.export.Exported;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.List;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class HipChatNotify extends Notifier {
+    private static final Logger LOG = Logger.getLogger(HipChatNotify.class.getName());
+
+    private static final Pattern WIN_ENV_VAR_REGEX = Pattern.compile("%([a-zA-Z0-9_]+)%");
+    private static final Pattern UNIX_ENV_VAR_REGEX = Pattern.compile("\\$([a-zA-Z0-9_]+)");
+    public static final String UNIX_SEP = "/";
+    public static final String WINDOWS_SEP = "\\";
+
     private final String message;
     private final String color;
     private final boolean html;
@@ -27,6 +42,7 @@ public class HipChatNotify extends Notifier {
     private final String from;
     private final String roomName;
     private final boolean markFlag;
+    private final boolean fromCommand;
 
     @DataBoundConstructor
     public HipChatNotify(
@@ -36,7 +52,8 @@ public class HipChatNotify extends Notifier {
         boolean notify,
         String from,
         String roomName,
-        boolean markFlag) {
+        boolean markFlag,
+        boolean fromCommand) {
         this.message = message;
         this.color = color;
         this.html = html;
@@ -44,6 +61,7 @@ public class HipChatNotify extends Notifier {
         this.from = from;
         this.roomName = roomName;
         this.markFlag = markFlag;
+        this.fromCommand = fromCommand;
     }
 
     public String getMessage() {
@@ -74,8 +92,12 @@ public class HipChatNotify extends Notifier {
         return markFlag;
     }
 
+    public boolean isFromCommand() {
+        return fromCommand;
+    }
+
     @Override
-    public boolean perform(AbstractBuild build, Launcher launcher, BuildListener listener) {
+    public boolean perform(AbstractBuild build, Launcher launcher, BuildListener listener) throws IOException, InterruptedException {
 
         HipchatAuthentication authentication = getAuthentication();
         if (authentication == null) {
@@ -83,9 +105,21 @@ public class HipChatNotify extends Notifier {
             return !markFlag;
         }
 
-        String url = Messages.Api_Url();
-        HipchatNotificationRequest request = new HipchatNotificationRequest(url, authentication.getToken(), authentication.getRoom());
-        request.setMessage(message);
+        String postMessage;
+        if(isFromCommand()) {
+            postMessage = executeCommand(build, launcher, listener);
+        }else {
+            postMessage = message;
+        }
+
+        if(message == null){
+            listener.getLogger().println("[ERROR] Hipcaht Notifier. Can't find message. roomName:" + roomName);
+            return !markFlag;
+        }
+
+        HipchatNotificationRequest request = new HipchatNotificationRequest(
+            Messages.Api_Url(), authentication.getToken(), authentication.getRoom());
+        request.setMessage(postMessage);
         request.setColor(HipchatNotificationRequest.COLOR.valueOf(color));
         request.setFrom(from);
         request.setHtml(html);
@@ -95,6 +129,116 @@ public class HipChatNotify extends Notifier {
         boolean isSuccess = client.exec(request);
         build.getResult();
         return !markFlag || isSuccess;
+    }
+
+    private String executeCommand(AbstractBuild build, Launcher launcher, BuildListener listener) {
+
+        String cmdLine = convertSeparator(message, (launcher.isUnix() ? UNIX_SEP : WINDOWS_SEP));
+
+        if (launcher.isUnix()) {
+            cmdLine = convertEnvVarsToUnix(cmdLine);
+        } else {
+            cmdLine = convertEnvVarsToWindows(cmdLine);
+        }
+
+        ArgumentListBuilder args = new ArgumentListBuilder();
+        if (cmdLine != null) {
+            args.addTokenized((launcher.isUnix()) ? "./" + cmdLine : cmdLine);
+        }
+
+        if (!launcher.isUnix()) {
+            args = args.toWindowsCommand();
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+        try {
+            EnvVars env = build.getEnvironment(listener);
+            env.putAll(build.getBuildVariables());
+            final Proc proc = launcher.decorateFor(build.getBuiltOn()).launch()
+                .cmds(args).envs(env).stdout(baos).pwd(build.getWorkspace()).start();
+            if (proc.join() != 0) {
+                return null;
+            }
+            return baos.toString();
+
+        } catch (Exception e) {
+            e.printStackTrace(listener.fatalError("execute shell error."));
+            return null;
+        } finally {
+            try {
+                baos.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public static String convertSeparator(String cmdLine, String newSeparator) {
+        String match = "[/" + Pattern.quote("\\") + "]";
+        String replacement = Matcher.quoteReplacement(newSeparator);
+
+        Pattern words = Pattern.compile("\\S+");
+        Pattern urls = Pattern.compile("(https*|ftp|git):");
+        StringBuffer sb = new StringBuffer();
+        Matcher m = words.matcher(cmdLine);
+        while (m.find()) {
+            String item = m.group();
+            if (!urls.matcher(item).find()) {
+                // Not sure if File.separator is right if executing on slave with OS different from master's one
+                //String cmdLine = commandLine.replaceAll("[/\\\\]", File.separator);
+                m.appendReplacement(sb, Matcher.quoteReplacement(item.replaceAll(match, replacement)));
+            }
+        }
+        m.appendTail(sb);
+
+        return sb.toString();
+    }
+
+    /**
+     * Convert Windows-style environment variables to UNIX-style.
+     * E.g. "script --opt=%OPT%" to "script --opt=$OPT"
+     *
+     * @param cmdLine The command line with Windows-style env vars to convert.
+     * @return The command line with UNIX-style env vars.
+     */
+    public static String convertEnvVarsToUnix(String cmdLine) {
+        if (cmdLine == null) {
+            return null;
+        }
+
+        StringBuffer sb = new StringBuffer();
+
+        Matcher m = WIN_ENV_VAR_REGEX.matcher(cmdLine);
+        while (m.find()) {
+            m.appendReplacement(sb, "\\$$1");
+        }
+        m.appendTail(sb);
+
+        return sb.toString();
+    }
+
+    /**
+     * Convert UNIX-style environment variables to Windows-style.
+     * E.g. "script --opt=$OPT" to "script --opt=%OPT%"
+     *
+     * @param cmdLine The command line with Windows-style env vars to convert.
+     * @return The command line with UNIX-style env vars.
+     */
+    public static String convertEnvVarsToWindows(String cmdLine) {
+        if (cmdLine == null) {
+            return null;
+        }
+
+        StringBuffer sb = new StringBuffer();
+
+        Matcher m = UNIX_ENV_VAR_REGEX.matcher(cmdLine);
+        while (m.find()) {
+            m.appendReplacement(sb, "%$1%");
+        }
+        m.appendTail(sb);
+
+        return sb.toString();
     }
 
     private HipchatAuthentication getAuthentication() {
@@ -160,7 +304,7 @@ public class HipChatNotify extends Notifier {
             for (HipchatAuthentication hipchatAuthentication : authentications) {
                 items.add(hipchatAuthentication.getName(), hipchatAuthentication.getName());
             }
-            if(items.size() == 0){
+            if (items.size() == 0) {
                 items.add("( No Rooms )");
             }
             return items;
